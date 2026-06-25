@@ -1,0 +1,50 @@
+import pickle
+import pandas as pd
+from rank_bm25 import BM25Okapi
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+class BM25Indexer:
+    def __init__(self):
+        self.bm25 = None
+        self.doc_ids = []
+        self.models_dir = BASE_DIR / "data" / "models"
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+
+    def fit_and_save(self, docs_df):
+        print("Building BM25 Index...")
+        self.doc_ids = [str(uid) for uid in docs_df['doc_id'].tolist()]
+        corpus_tokenized = [str(text).split() for text in docs_df['processed_text'].fillna("").tolist()]
+        
+        self.bm25 = BM25Okapi(corpus_tokenized)
+        
+        with open(self.models_dir / "bm25_model.pkl", "wb") as f:
+            pickle.dump(self.bm25, f)
+        with open(self.models_dir / "bm25_doc_ids.pkl", "wb") as f:
+            pickle.dump(self.doc_ids, f)
+        print("BM25 Index saved successfully.")
+
+    def load_models(self):
+        with open(self.models_dir / "bm25_model.pkl", "rb") as f:
+            self.bm25 = pickle.load(f)
+        with open(self.models_dir / "bm25_doc_ids.pkl", "rb") as f:
+            self.doc_ids = pickle.load(f)
+
+    def search(self, processed_query, k1=1.5, b=0.75, top_k=10):
+        if self.bm25 is None:
+            self.load_models()
+        
+        self.bm25.k1 = k1
+        self.bm25.b = b
+        
+        query_tokens = str(processed_query).split()
+        scores = self.bm25.get_scores(query_tokens)
+        
+        top_indices = scores.argsort()[::-1][:top_k]
+        
+        results = []
+        for idx in top_indices:
+            if scores[idx] > 0:
+                results.append((self.doc_ids[idx], float(scores[idx])))
+        return results

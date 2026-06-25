@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+
+# Large data and generated artifacts
+data/raw/
+data/models/
+data/processed/
+data/documents.db
+data_backup_nq/
+
+# Old NQ backup files
+*_nq.*
+
+# Local files
+.streamlit/
+.cache/
+*.log
