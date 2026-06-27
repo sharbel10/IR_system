@@ -6,10 +6,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 os.environ["IR_DATASETS_HOME"] = str(BASE_DIR / "data" / "raw")
 
 import pandas as pd
-import ir_datasets
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+
+# ir_datasets is only needed to build the corpus (build_pipeline). It is imported lazily
+# there so search/evaluation scripts can import this service without that dependency.
 
 nltk.download("stopwords", quiet=True)
 nltk.download("wordnet", quiet=True)
@@ -22,10 +24,12 @@ class PreprocessingService:
         self.processed_path = BASE_DIR / "data" / "processed"
         self.processed_path.mkdir(parents=True, exist_ok=True)
 
+    # Shared preprocessing for documents and live queries — keeps term forms aligned at search time.
     def preprocess_text(self, text):
         if not isinstance(text, str):
             return ""
 
+        # Same pipeline for docs and queries: lowercase → tokenize → remove stopwords → lemmatize.
         text = text.lower()
         tokens = re.findall(r"\w+", text)
 
@@ -38,6 +42,8 @@ class PreprocessingService:
         return " ".join(processed_tokens)
 
     def build_pipeline(self, dataset_name="beir/webis-touche2020"):
+        import ir_datasets  # lazy import: only required when building the corpus
+
         print(f"Starting pipeline for dataset: '{dataset_name}'")
         print("Loading dataset via ir_datasets...")
 
@@ -56,6 +62,7 @@ class PreprocessingService:
             queries_df["query_id"].isin(qrels_df["query_id"])
         ].copy()
 
+        # Store a preprocessed version of each dataset query for evaluation with sparse retrievers.
         queries_df["processed_query"] = queries_df["text"].apply(self.preprocess_text)
 
         print("Extracting and preprocessing ALL Documents...")

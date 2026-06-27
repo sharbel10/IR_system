@@ -22,11 +22,11 @@ class QueryRefinementService:
             import pandas as pd
             processed_path = BASE_DIR / 'data' / 'processed'
             documents_file = processed_path / 'documents.csv'
-            
+
             if documents_file.exists():
                 df = pd.read_csv(documents_file)
                 lines = df['text'].fillna("").astype(str).tolist()[:30000]
-                
+
                 for line in lines:
                     words = re.findall(r'\w+', line.lower())
                     self.words_corpus.update(words)
@@ -35,6 +35,23 @@ class QueryRefinementService:
                         self.word_pairs[words[i+1]][words[i]] += 1
         except Exception:
             pass
+
+        # Fallback when documents.csv is missing: spell correction needs a known-word vocabulary.
+        if not self.words_corpus:
+            self._load_fallback_vocabulary()
+
+    def _load_fallback_vocabulary(self):
+        try:
+            nltk.download('words', quiet=True)
+            from nltk.corpus import words as nltk_words
+
+            for word in nltk_words.words():
+                w = word.lower()
+                if w.isalpha():
+                    self.words_corpus[w] += 1
+        except Exception:
+            for word in ("environment", "effect", "revenue", "investment", "stock", "balance", "sheet"):
+                self.words_corpus[word] += 1
 
     def _edits1(self, word):
         letters    = 'abcdefghijklmnopqrstuvwxyz'

@@ -2,11 +2,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from services.preprocessing import PreprocessingService
-from services.indexers.tfidf_indexer import TFIDFIndexer
-from services.indexers.bm25_indexer import BM25Indexer
-from services.indexers.embedding_indexer import EmbeddingIndexer
-from services.indexers.hybrid_indexer import HybridIndexer
+from services.query_processor import QueryProcessor
 from services.cluster_boosting import ClusterBoostingService
 from services.database import DocumentDatabase
 
@@ -18,41 +14,24 @@ st.title("Information Retrieval Search System")
 
 @st.cache_resource
 def load_services():
-    preprocessing = PreprocessingService()
-    tfidf = TFIDFIndexer()
-    bm25 = BM25Indexer()
-    embedding = EmbeddingIndexer()
-    hybrid = HybridIndexer()
+    query_processor = QueryProcessor()
     cluster_boosting = ClusterBoostingService()
     document_db = DocumentDatabase()
-    return preprocessing, tfidf, bm25, embedding, hybrid, cluster_boosting, document_db
+    return query_processor, cluster_boosting, document_db
 
 
-preprocessing, tfidf, bm25, embedding, hybrid, cluster_boosting, document_db = load_services()
+query_processor, cluster_boosting, document_db = load_services()
 
 
-def run_base_search(search_type, query, processed_query, k1, b, top_k):
-    if search_type == "TF-IDF":
-        return tfidf.search(processed_query, top_k=top_k)
-    if search_type == "BM25":
-        return bm25.search(processed_query, k1=k1, b=b, top_k=top_k)
-    if search_type == "Embedding":
-        return embedding.search(query, top_k=top_k)
-    if search_type == "Hybrid Parallel":
-        return hybrid.search_parallel(
-            raw_query=query,
-            processed_query=processed_query,
-            k1=k1,
-            b=b,
-            top_k=top_k,
-        )
-    return hybrid.search_serial(
-        raw_query=query,
-        processed_query=processed_query,
-        k1=k1,
-        b=b,
-        top_k=top_k,
-    )
+def ui_search_type_to_mode(search_type):
+    return {
+        "TF-IDF": "tfidf",
+        "BM25": "bm25",
+        "Embedding": "embedding",
+        "Hybrid Parallel": "parallel",
+        "Hybrid Serial": "serial",
+        "Weighted Hybrid / LTR": "ltr",
+    }[search_type]
 
 
 st.sidebar.header("Search Settings")
@@ -65,7 +44,25 @@ search_type = st.sidebar.selectbox(
         "Embedding",
         "Hybrid Parallel",
         "Hybrid Serial",
+        "Weighted Hybrid / LTR",
     ],
+)
+
+# Weighted Hybrid / LTR: configurable per-ranker weights for the fusion step.
+# Defaults favor BM25, the strongest single ranker on this dataset (tuned on validation).
+ltr_weights = {"tfidf": 1.0, "bm25": 2.0, "embedding": 0.5}
+if search_type == "Weighted Hybrid / LTR":
+    st.sidebar.markdown("**LTR Fusion Weights**")
+    ltr_weights = {
+        "tfidf": st.sidebar.slider("Weight: TF-IDF", 0.0, 3.0, 1.0, 0.1),
+        "bm25": st.sidebar.slider("Weight: BM25", 0.0, 3.0, 2.0, 0.1),
+        "embedding": st.sidebar.slider("Weight: Embedding", 0.0, 3.0, 0.5, 0.1),
+    }
+
+apply_expansion = st.sidebar.checkbox(
+    "Enable Query Expansion (Synonyms)",
+    value=False,
+    help="Adds WordNet synonyms to the processed query before sparse retrieval (TF-IDF, BM25, hybrid).",
 )
 
 use_clustering = st.sidebar.checkbox(
@@ -95,16 +92,22 @@ if st.button("Search"):
     if not query.strip():
         st.warning("Please enter a query.")
     else:
-        processed_query = preprocessing.preprocess_text(query)
+        # Requirement 5 — raw_query is refined first (spelling correction), then preprocessed for sparse search.
+        corrected_query = query_processor.refinement_service.suggest_correction(query)
+        processed_query = query_processor.pipeline.preprocess_text(corrected_query)
+        if apply_expansion:
+            processed_query = query_processor.refinement_service.expand_with_synonyms(processed_query)
 
         with st.spinner("Searching..."):
-            base_results = run_base_search(
-                search_type=search_type,
-                query=query,
-                processed_query=processed_query,
+            # QueryProcessor: corrected query → preprocessing → retrieval (TF-IDF/BM25 use processed_query; Embedding uses corrected raw text).
+            base_results = query_processor.process_and_search(
+                raw_query=query,
+                search_mode=ui_search_type_to_mode(search_type),
                 k1=k1,
                 b=b,
                 top_k=top_k,
+                apply_expansion=apply_expansion,
+                weights=ltr_weights,
             )
 
             query_cluster = None
@@ -128,7 +131,9 @@ if st.button("Search"):
                 ]
 
         st.subheader("Top Retrieved Documents")
-        st.write(f"Processed Query: `{processed_query}`")
+        st.write(f"**Original Query:** `{query}`")
+        st.write(f"**Corrected Query:** `{corrected_query}`")
+        st.write(f"**Processed Query:** `{processed_query}`")
 
         if use_clustering and query_cluster is not None:
             st.write(f"**Query Cluster:** {query_cluster}")
